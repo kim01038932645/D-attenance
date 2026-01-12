@@ -26,7 +26,7 @@
                     </span>
                     SRT D조 출석 관리 시스템
                 </h1>
-                <div id="user-status" class="text-sm font-medium text-slate-500 bg-slate-100 px-3 py-1 rounded-full">
+                <div id="user-status" class="text-sm font-medium text-slate-500 bg-slate-100 px-3 py-1 rounded-full transition-all">
                     서버 연결 중...
                 </div>
             </div>
@@ -124,6 +124,7 @@
         // --- Core Functions ---
         function renderTabs() {
             const container = document.getElementById('month-tabs');
+            if (!container) return;
             container.innerHTML = '';
             for (let i = 1; i <= 7; i++) {
                 const btn = document.createElement('button');
@@ -141,6 +142,7 @@
 
         function renderDateSelect() {
             const select = document.getElementById('date-select');
+            if (!select) return;
             const filteredDates = meetingDates.filter(d => d.month === selectedMonth);
             select.innerHTML = filteredDates.map(d => `<option value="${d.full}">${d.display}</option>`).join('');
             select.onchange = () => renderAttendanceGrid();
@@ -213,16 +215,18 @@
 
         // --- Interaction ---
         window.toggleAttendance = async (name, date) => {
-            if (!currentUser || !db) return showToast("연결 대기 중...");
+            if (!currentUser || !db) {
+                showToast("서버와 연결 중입니다. 잠시만 기다려주세요.");
+                return;
+            }
             const currentStatus = allAttendanceData[date]?.[name] || false;
             try {
-                // Rule 1: Correct collection path
                 const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'attendance', date);
                 await setDoc(docRef, { [name]: !currentStatus }, { merge: true });
                 showToast(`${name}님 상태 변경 완료`);
             } catch (error) {
                 console.error("Save Error:", error);
-                showToast("저장 권한이 없거나 설정 오류입니다.");
+                showToast("저장 권한이 없습니다 (Firestore 규칙 확인)");
             }
         };
 
@@ -231,44 +235,50 @@
             renderTabs();
             renderDateSelect();
 
-            const app = initializeApp(firebaseConfig);
-            const auth = getAuth(app);
-            db = getFirestore(app);
-
-            // Rule 3: Wait for auth before queries
             try {
-                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                    await signInWithCustomToken(auth, __initial_auth_token);
-                } else {
-                    await signInAnonymously(auth);
-                }
-            } catch (err) {
-                console.error("Auth Fail:", err);
-                const statusEl = document.getElementById('user-status');
-                if (statusEl) statusEl.innerText = "인증 설정 오류";
-                return;
-            }
+                const app = initializeApp(firebaseConfig);
+                const auth = getAuth(app);
+                db = getFirestore(app);
 
-            onAuthStateChanged(auth, (user) => {
-                currentUser = user;
+                // Try Auth
+                const authPromise = (typeof __initial_auth_token !== 'undefined' && __initial_auth_token)
+                    ? signInWithCustomToken(auth, __initial_auth_token)
+                    : signInAnonymously(auth);
+
+                await authPromise;
+
+                onAuthStateChanged(auth, (user) => {
+                    currentUser = user;
+                    const statusEl = document.getElementById('user-status');
+                    if (statusEl) {
+                        statusEl.innerText = user ? `연결됨: ${user.uid.substring(0,6)}` : "인증 필요";
+                        statusEl.className = user 
+                            ? "text-sm font-medium text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full"
+                            : "text-sm font-medium text-amber-600 bg-amber-50 px-3 py-1 rounded-full";
+                    }
+                    
+                    if (user) {
+                        const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'attendance'));
+                        onSnapshot(q, (snapshot) => {
+                            const newData = {};
+                            snapshot.forEach(doc => { newData[doc.id] = doc.data(); });
+                            allAttendanceData = newData; 
+                            renderAttendanceGrid();
+                            renderRanking();
+                        }, (err) => {
+                            console.error("Firestore Fail:", err);
+                            showToast("데이터 읽기 권한이 없습니다.");
+                        });
+                    }
+                });
+            } catch (err) {
+                console.error("Detailed Auth Error:", err);
                 const statusEl = document.getElementById('user-status');
-                if (statusEl) statusEl.innerText = user ? `연결됨: ${user.uid.substring(0,6)}` : "재연결 중...";
-                
-                if (user) {
-                    // Rule 1 & 2: Simple query on public path
-                    const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'attendance'));
-                    onSnapshot(q, (snapshot) => {
-                        const newData = {};
-                        snapshot.forEach(doc => { newData[doc.id] = doc.data(); });
-                        allAttendanceData = newData; 
-                        renderAttendanceGrid();
-                        renderRanking();
-                    }, (err) => {
-                        console.error("Firestore Fail:", err);
-                        showToast("데이터 접근 권한 오류");
-                    });
+                if (statusEl) {
+                    statusEl.innerText = "인증 설정 오류 (콘솔 확인)";
+                    statusEl.className = "text-sm font-medium text-red-600 bg-red-50 px-3 py-1 rounded-full";
                 }
-            });
+            }
         }
 
         startApp();
