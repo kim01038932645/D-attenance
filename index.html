@@ -71,7 +71,7 @@
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, onSnapshot, collection, query } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // --- Configuration (Environment priority) ---
+        // --- Configuration ---
         const firebaseConfig = typeof __firebase_config !== 'undefined' 
             ? JSON.parse(__firebase_config) 
             : {
@@ -116,6 +116,7 @@
 
         const showToast = (msg) => {
             const toast = document.getElementById('toast');
+            if (!toast) return;
             toast.innerText = msg;
             toast.style.opacity = '1';
             setTimeout(() => { toast.style.opacity = '0'; }, 2000);
@@ -183,10 +184,11 @@
             const monthlyCounts = {};
             Object.keys(allAttendanceData).forEach(dateStr => {
                 const d = new Date(dateStr);
+                // Check if the date belongs to the currently selected month
                 if (d.getMonth() + 1 === selectedMonth) {
                     const daily = allAttendanceData[dateStr];
                     Object.keys(daily).forEach(name => {
-                        if (daily[name]) {
+                        if (daily[name] === true) {
                             monthlyCounts[name] = (monthlyCounts[name] || 0) + 1;
                         }
                     });
@@ -216,17 +218,30 @@
         // --- Interaction ---
         window.toggleAttendance = async (name, date) => {
             if (!currentUser || !db) {
-                showToast("서버와 연결 중입니다. 잠시만 기다려주세요.");
+                showToast("서버와 연결 중입니다...");
                 return;
             }
-            const currentStatus = allAttendanceData[date]?.[name] || false;
+
+            // Get current state from local data
+            const currentStatus = (allAttendanceData[date] && allAttendanceData[date][name]) === true;
+            const nextStatus = !currentStatus;
+
             try {
                 const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'attendance', date);
-                await setDoc(docRef, { [name]: !currentStatus }, { merge: true });
-                showToast(`${name}님 상태 변경 완료`);
+                
+                // Update specific field in the document
+                await setDoc(docRef, { [name]: nextStatus }, { merge: true });
+                
+                // Optimistic UI update for immediate feedback
+                if (!allAttendanceData[date]) allAttendanceData[date] = {};
+                allAttendanceData[date][name] = nextStatus;
+                renderAttendanceGrid();
+                renderRanking();
+                
+                showToast(`${name}님 ${nextStatus ? '출석' : '결석'} 처리`);
             } catch (error) {
-                console.error("Save Error:", error);
-                showToast("저장 권한이 없습니다 (Firestore 규칙 확인)");
+                console.error("Update Error:", error);
+                showToast("업데이트 실패 (권한 확인 필요)");
             }
         };
 
@@ -240,7 +255,6 @@
                 const auth = getAuth(app);
                 db = getFirestore(app);
 
-                // Try Auth
                 const authPromise = (typeof __initial_auth_token !== 'undefined' && __initial_auth_token)
                     ? signInWithCustomToken(auth, __initial_auth_token)
                     : signInAnonymously(auth);
@@ -266,16 +280,16 @@
                             renderAttendanceGrid();
                             renderRanking();
                         }, (err) => {
-                            console.error("Firestore Fail:", err);
-                            showToast("데이터 읽기 권한이 없습니다.");
+                            console.error("Firestore Error:", err);
+                            showToast("데이터 연동 오류");
                         });
                     }
                 });
             } catch (err) {
-                console.error("Detailed Auth Error:", err);
+                console.error("Initialization Error:", err);
                 const statusEl = document.getElementById('user-status');
                 if (statusEl) {
-                    statusEl.innerText = "인증 설정 오류 (콘솔 확인)";
+                    statusEl.innerText = "연결 실패";
                     statusEl.className = "text-sm font-medium text-red-600 bg-red-50 px-3 py-1 rounded-full";
                 }
             }
