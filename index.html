@@ -72,7 +72,6 @@
         import { getFirestore, doc, setDoc, onSnapshot, collection, query } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // --- Firebase Configuration ---
-        // 환경 변수가 없을 경우를 대비해 설정값을 직접 확인하세요.
         const firebaseConfig = typeof __firebase_config !== 'undefined' 
             ? JSON.parse(__firebase_config) 
             : {
@@ -218,7 +217,7 @@
         // --- Interaction ---
         window.toggleAttendance = async (name, date) => {
             if (!currentUser || !db) {
-                showToast("인증되지 않은 사용자입니다.");
+                showToast("인증 대기 중입니다...");
                 return;
             }
 
@@ -229,16 +228,16 @@
                 const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'attendance', date);
                 await setDoc(docRef, { [name]: nextStatus }, { merge: true });
                 
-                // Optimistic UI
+                // Optimistic UI Update
                 if (!allAttendanceData[date]) allAttendanceData[date] = {};
                 allAttendanceData[date][name] = nextStatus;
                 renderAttendanceGrid();
                 renderRanking();
                 
-                showToast(`${name}님 ${nextStatus ? '출석' : '결석'} 처리`);
+                showToast(`${name}님 ${nextStatus ? '출석' : '결석'} 처리 완료`);
             } catch (error) {
                 console.error("Save Error:", error);
-                showToast("저장 실패: Firestore 규칙을 확인하세요.");
+                showToast("권한 부족 또는 네트워크 오류");
             }
         };
 
@@ -248,37 +247,33 @@
             renderDateSelect();
 
             try {
+                // Firebase 서비스 초기화
                 const app = initializeApp(firebaseConfig);
                 const auth = getAuth(app);
                 db = getFirestore(app);
 
-                // 익명 로그인 시도
-                const initAuth = async () => {
-                    try {
-                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                            await signInWithCustomToken(auth, __initial_auth_token);
-                        } else {
-                            await signInAnonymously(auth);
-                        }
-                    } catch (err) {
-                        console.error("Auth Failure Detail:", err.code, err.message);
-                        throw err; // Re-throw to catch block
+                // 익명 로그인 수행
+                const performAuth = async () => {
+                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                        return await signInWithCustomToken(auth, __initial_auth_token);
+                    } else {
+                        return await signInAnonymously(auth);
                     }
                 };
 
-                await initAuth();
+                await performAuth();
 
                 onAuthStateChanged(auth, (user) => {
                     currentUser = user;
                     const statusEl = document.getElementById('user-status');
-                    if (statusEl) {
-                        statusEl.innerText = user ? `연결됨: ${user.uid.substring(0,6)}` : "인증 필요";
-                        statusEl.className = user 
-                            ? "text-sm font-medium text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full"
-                            : "text-sm font-medium text-amber-600 bg-amber-50 px-3 py-1 rounded-full";
-                    }
                     
                     if (user) {
+                        if (statusEl) {
+                            statusEl.innerText = `연결됨: ${user.uid.substring(0,6)}`;
+                            statusEl.className = "text-sm font-medium text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full";
+                        }
+                        
+                        // 데이터 실시간 감시 시작
                         const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'attendance'));
                         onSnapshot(q, (snapshot) => {
                             const newData = {};
@@ -287,16 +282,21 @@
                             renderAttendanceGrid();
                             renderRanking();
                         }, (err) => {
-                            console.error("Firestore Listen Error:", err);
-                            showToast("데이터 접근 권한이 없습니다.");
+                            console.error("Firestore Error:", err);
+                            showToast("데이터 접근 권한이 제한되었습니다.");
                         });
+                    } else {
+                        if (statusEl) {
+                            statusEl.innerText = "로그인 필요";
+                            statusEl.className = "text-sm font-medium text-amber-600 bg-amber-50 px-3 py-1 rounded-full";
+                        }
                     }
                 });
             } catch (err) {
-                console.error("Connection Error:", err);
+                console.error("Firebase Connection Error:", err.code, err.message);
                 const statusEl = document.getElementById('user-status');
                 if (statusEl) {
-                    statusEl.innerText = "연결 실패 (Firebase 설정 확인)";
+                    statusEl.innerText = "연결 실패 (콘솔 확인)";
                     statusEl.className = "text-sm font-medium text-red-600 bg-red-50 px-3 py-1 rounded-full";
                 }
             }
