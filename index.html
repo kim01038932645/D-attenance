@@ -71,13 +71,18 @@
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, onSnapshot, collection, query } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // --- Configuration ---
-        const firebaseConfig = JSON.parse(__firebase_config);
-        const app = initializeApp(firebaseConfig);
-        const auth = getAuth(app);
-        const db = getFirestore(app);
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'srt-d-group-2026';
-
+        // --- Configuration (Environment priority) ---
+        const firebaseConfig = typeof __firebase_config !== 'undefined' 
+            ? JSON.parse(__firebase_config) 
+            : {
+                apiKey: "AIzaSyC0yAqcMqjL-8ij4z0QPe6nkkuD6HCIejc",
+                authDomain: "attendd-f4764.firebaseapp.com",
+                projectId: "attendd-f4764",
+                storageBucket: "attendd-f4764.firebasestorage.app",
+                messagingSenderId: "1000305955878",
+                appId: "1:1000305955878:web:bfe647f8682335643ac2e7"
+            };
+               
         // --- State ---
         const members = ["강동현", "강동훈", "송채한", "김미화", "김재산", "김찬석", "김한나", "류지찬", "박성환", "박종봉", "소병득", "서정화", "신영섭", "안지훈", "오한천", "이승준", "이용구", "정덕수", "주효석", "서인수", "박창선", "김병식"];
         let selectedMonth = new Date().getMonth() + 1;
@@ -85,6 +90,8 @@
         
         let allAttendanceData = {};
         let currentUser = null;
+        let db; 
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'srt-d-group-2026';
 
         // --- Utils ---
         function getMeetingDates(year, startMonth, endMonth) {
@@ -93,7 +100,7 @@
                 const date = new Date(year, m - 1, 1);
                 while (date.getMonth() === m - 1) {
                     const day = date.getDay(); 
-                    if (day === 0 || day === 3) { // Sun(0), Wed(3)
+                    if (day === 0 || day === 3) {
                         dates.push({
                             month: m,
                             full: date.toISOString().split('T')[0],
@@ -206,25 +213,29 @@
 
         // --- Interaction ---
         window.toggleAttendance = async (name, date) => {
-            if (!currentUser) return showToast("연결 대기 중...");
+            if (!currentUser || !db) return showToast("연결 대기 중...");
             const currentStatus = allAttendanceData[date]?.[name] || false;
             try {
+                // Rule 1: Correct collection path
                 const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'attendance', date);
                 await setDoc(docRef, { [name]: !currentStatus }, { merge: true });
                 showToast(`${name}님 상태 변경 완료`);
             } catch (error) {
                 console.error("Save Error:", error);
-                showToast("저장 실패");
+                showToast("저장 권한이 없거나 설정 오류입니다.");
             }
         };
 
         // --- App Entry ---
         async function startApp() {
-            // UI 초기화
             renderTabs();
             renderDateSelect();
 
-            // Firebase Auth
+            const app = initializeApp(firebaseConfig);
+            const auth = getAuth(app);
+            db = getFirestore(app);
+
+            // Rule 3: Wait for auth before queries
             try {
                 if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                     await signInWithCustomToken(auth, __initial_auth_token);
@@ -233,25 +244,28 @@
                 }
             } catch (err) {
                 console.error("Auth Fail:", err);
+                const statusEl = document.getElementById('user-status');
+                if (statusEl) statusEl.innerText = "인증 설정 오류";
+                return;
             }
 
-            // Auth State & Data Listener
             onAuthStateChanged(auth, (user) => {
                 currentUser = user;
                 const statusEl = document.getElementById('user-status');
                 if (statusEl) statusEl.innerText = user ? `연결됨: ${user.uid.substring(0,6)}` : "재연결 중...";
                 
                 if (user) {
+                    // Rule 1 & 2: Simple query on public path
                     const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'attendance'));
                     onSnapshot(q, (snapshot) => {
                         const newData = {};
                         snapshot.forEach(doc => { newData[doc.id] = doc.data(); });
-                        allAttendanceData = newData; // 전체 데이터 교체로 무결성 유지
+                        allAttendanceData = newData; 
                         renderAttendanceGrid();
                         renderRanking();
                     }, (err) => {
                         console.error("Firestore Fail:", err);
-                        showToast("데이터 연동 실패");
+                        showToast("데이터 접근 권한 오류");
                     });
                 }
             });
